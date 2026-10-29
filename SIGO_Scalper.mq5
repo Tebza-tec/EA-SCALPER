@@ -62,7 +62,7 @@ CRiskManager Risk;
 CTradeManager Trades;
 CSignalEngine Signals;
 CDashboard Dashboard;
-string SymbolName,Status="Starting",Trend="Waiting",LeaseKey;
+string TradeSymbolName,Status="Starting",Trend="Waiting",LeaseKey;
 datetime LastBar=0;
 double LeaseValue=0;
 bool HaveLease=false,Tester=false;
@@ -119,24 +119,24 @@ bool ValidateInputs(void)
 int OnInit(void)
 {
    if(!ValidateInputs()) { Print("SIGO: invalid input parameters"); return INIT_PARAMETERS_INCORRECT; }
-   SymbolName=TradingSymbol=="" ? _Symbol:TradingSymbol;
-   if(SymbolName!=_Symbol)
+   TradeSymbolName=TradingSymbol=="" ? _Symbol:TradingSymbol;
+   if(TradeSymbolName!=_Symbol)
    { Print("SIGO: attach EA to the exact configured symbol chart so OnTick uses its quotes"); return INIT_PARAMETERS_INCORRECT; }
-   if(!SymbolSelect(SymbolName,true) || SymbolInfoDouble(SymbolName,SYMBOL_TRADE_TICK_SIZE)<=0)
+   if(!SymbolSelect(TradeSymbolName,true) || SymbolInfoDouble(TradeSymbolName,SYMBOL_TRADE_TICK_SIZE)<=0)
    { Print("SIGO: symbol unavailable / invalid tick size"); return INIT_FAILED; }
    Tester=(bool)MQLInfoInteger(MQL_TESTER);
    LeaseKey=StringFormat("SIGO.control.%I64d",AccountInfoInteger(ACCOUNT_LOGIN));
    if(!Lease()) { Print("SIGO: another controller is active for this account in this terminal"); return INIT_FAILED; }
    if(AccountInfoDouble(ACCOUNT_EQUITY)<=0) { Print("SIGO: wait for positive account equity before initialization"); return INIT_FAILED; }
-   if(!Risk.Init(SymbolName,MagicNumber,MaximumDailyEquityLossPercent,MaximumOverallDrawdownPercent,
+   if(!Risk.Init(TradeSymbolName,MagicNumber,MaximumDailyEquityLossPercent,MaximumOverallDrawdownPercent,
              MaximumTotalOpenRiskPercent,EstimatedRoundTurnCostPerLot,StopSlippageAllowancePoints+(double)MaximumDeviationPoints,FreeMarginReservePercent)) return INIT_FAILED;
-   Trades.Init(SymbolName,MagicNumber,MaximumDeviationPoints);
-   if(!Signals.Init(SymbolName,StrategyTimeframe,ConfirmationTimeframe,TrendTimeframe,FastEMAPeriod,
+   Trades.Init(TradeSymbolName,MagicNumber,MaximumDeviationPoints);
+   if(!Signals.Init(TradeSymbolName,StrategyTimeframe,ConfirmationTimeframe,TrendTimeframe,FastEMAPeriod,
                     SlowEMAPeriod,RSIPeriod,ATRPeriod,ZoneLookbackBars,ZoneToleranceATR,MinimumATRPoints,MaximumATRPoints))
    { Print("SIGO: indicator handle creation failed"); return INIT_FAILED; }
    Dashboard.Init(ShowDashboard);
    // Do not enter on the current, possibly already processed bar after restart.
-   LastBar=iTime(SymbolName,StrategyTimeframe,0);
+   LastBar=iTime(TradeSymbolName,StrategyTimeframe,0);
    if(!EventSetTimer(1)) return INIT_FAILED;
    Print("SIGO: initialized. No profitability claim; use demo / Strategy Tester first.");
    return INIT_SUCCEEDED;
@@ -165,16 +165,16 @@ void OnTimer(void)
    if(!Lease()) { Report("Account controller lease lost"); return; }
    ProtectionAndManagement();
    MqlTick tick; double spread=0;
-   if(SymbolInfoTick(SymbolName,tick)) spread=(tick.ask-tick.bid)/SymbolInfoDouble(SymbolName,SYMBOL_POINT);
+   if(SymbolInfoTick(TradeSymbolName,tick)) spread=(tick.ask-tick.bid)/SymbolInfoDouble(TradeSymbolName,SYMBOL_POINT);
    Trend=Signals.CurrentTrend();
-   Dashboard.Draw(Status,SymbolName,Trend,SessionOpen()?"Open":"Closed",spread,RiskPercent,
+   Dashboard.Draw(Status,TradeSymbolName,Trend,SessionOpen()?"Open":"Closed",spread,RiskPercent,
                   Risk.Drawdown(),Risk.DailyRealized(),Trades.Count());
 }
 void OnTick(void)
 {
    if(!Lease()) { Report("Account controller lease unavailable"); return; }
    ProtectionAndManagement();
-   datetime bar=iTime(SymbolName,StrategyTimeframe,0);
+   datetime bar=iTime(TradeSymbolName,StrategyTimeframe,0);
    if(bar<=0 || bar==LastBar) return;
    LastBar=bar; // At most one submission attempt per candle, including rejected requests.
    string reason;
@@ -183,23 +183,23 @@ void OnTick(void)
    if(!Trades.CanEnter(MaximumTradesPerSymbol,MaximumAccountPositions,MinimumEntryIntervalSeconds,reason) ||
       Trades.LossPause(ConsecutiveLossLimit,LossPauseMinutes,reason)) { Report(reason); return; }
    MqlTick tick;
-   if(!SymbolInfoTick(SymbolName,tick) || tick.bid<=0 || tick.ask<=tick.bid || tick.time<=0 ||
+   if(!SymbolInfoTick(TradeSymbolName,tick) || tick.bid<=0 || tick.ask<=tick.bid || tick.time<=0 ||
       TimeCurrent()-tick.time>MaximumQuoteAgeSeconds) { Report("Invalid or stale quote"); return; }
-   double point=SymbolInfoDouble(SymbolName,SYMBOL_POINT);
+   double point=SymbolInfoDouble(TradeSymbolName,SYMBOL_POINT);
    if((tick.ask-tick.bid)/point>MaximumSpreadPoints) { Report("Spread exceeds limit"); return; }
    double atr=0; int side=Signals.Evaluate(atr,Trend,reason);
    if(side==0) { Report(reason); return; }
    Print("SIGO signal: ",reason);
    if((side>0 && TradingDirection==SIGO_SELL)||(side<0 && TradingDirection==SIGO_BUY))
    { Report("Signal blocked by direction setting"); return; }
-   long mode=SymbolInfoInteger(SymbolName,SYMBOL_TRADE_MODE);
-   long order_mode=SymbolInfoInteger(SymbolName,SYMBOL_ORDER_MODE);
+   long mode=SymbolInfoInteger(TradeSymbolName,SYMBOL_TRADE_MODE);
+   long order_mode=SymbolInfoInteger(TradeSymbolName,SYMBOL_ORDER_MODE);
    if(mode==SYMBOL_TRADE_MODE_DISABLED || mode==SYMBOL_TRADE_MODE_CLOSEONLY ||
       (side>0 && mode==SYMBOL_TRADE_MODE_SHORTONLY)||(side<0 && mode==SYMBOL_TRADE_MODE_LONGONLY)||
       (order_mode&SYMBOL_ORDER_MARKET)==0 || (order_mode&SYMBOL_ORDER_SL)==0 || (order_mode&SYMBOL_ORDER_TP)==0)
    { Report("Broker symbol does not permit requested market order with SL/TP"); return; }
    double entry=side>0 ? tick.ask:tick.bid;
-   double min_stop=(SymbolInfoInteger(SymbolName,SYMBOL_TRADE_STOPS_LEVEL)+1)*point;
+   double min_stop=(SymbolInfoInteger(TradeSymbolName,SYMBOL_TRADE_STOPS_LEVEL)+1)*point;
    double distance=MathMax(StopLossATRMultiplier*atr,min_stop+(tick.ask-tick.bid));
    double sl=Trades.Price(entry-side*distance,side>0?-1:1);
    double actual_distance=MathAbs(entry-sl);
